@@ -1,0 +1,151 @@
+### euSEM
+
+euSEM <- function(DATA,  #DATA (raw data required)
+ ARstart=T,              #Starting automatic search with autoregressive params free (T/F)
+ nu=1,                   #Number of external inputs
+ B=NA,                   #Beta fix/free pattern for confirmatory model
+ AS=T,                   #Automatic search on (T/F)
+ BC=T){                  #Bonferoni adjustment
+ #NOTE Bonferoni default switched from F to T on 4/28/11
+
+require(OpenMx)
+
+nr <- nrow(DATA)
+nc <- ncol(DATA)
+nv <- nc-nu
+n2 <- 2*nc
+nm <- n2+nu*nv
+
+#Bonferoni adjusted cutoff
+if(BC==T){
+ CUT <- qchisq((1-.05/(nm*nv)),1)
+ }else{
+ CUT <- 6.625}
+
+
+dnames <- c(paste("v",1:nv,"t2",sep=""),paste("v",1:nv,"t1",sep=""))
+dnames <- c(dnames,"ut1","ut2",paste("v",1:nv,"ut1",sep=""))
+
+Y0 <- DATA[,1:nv]
+Y1 <- rbind(0,Y0[1:(nr-1),])
+U0 <- DATA[,(nv+1):nc]
+U1 <- c(0,U0[1:(nr-1)])
+MO <- U0 * Y0
+DA2 <- cbind(Y1,Y0,U1,U0,MO)
+colnames(DA2) <- dnames
+CO <- cor(DA2)
+
+PSv <- matrix(.1,nm,nm)
+PSv[((nv+1):(2*nv)),]<-0
+PSv[,((nv+1):(2*nv))]<-0
+diag(PSv) <- 1
+
+PSp <- matrix(F,nm,nm)
+PSp[which(PSv!=0)]<-T
+
+#Beta parameter length
+bl <- nv*nm
+#Beta stvals - top and bottom
+BT <- matrix(0,nv,nm)
+BBB <- matrix(0,(2*nu+nu*nv),nm)
+#Beta stvals - bot
+if(is.matrix(B)){
+ BB <- matrix(0,nv,nm)
+ BB[which(B==T)] <- .1
+ BB. <- BB
+ }else{
+
+if(ARstart==T){
+ BB <- BB. <- cbind(diag(.1,nv),matrix(0,nv,(nm-nv)))
+ }else{
+ BB <- BB. <- matrix(0,nv,nm)}
+ }
+ BEv <- rbind(BT,BB,BBB)
+ BEp <- matrix(F,nm,nm)
+ BEp[which(BEv!=0)]<-T
+ 
+
+ 
+#Chisq storage
+ChiSt <- rep(0,bl)
+
+#Non-searched values
+NSc <- matrix(T,nv,nv)
+diag(NSc) <- F
+NS <- cbind(!BEp[(nv+1):(2*nv),1:nv],NSc,!BEp[(nv+1):(2*nv),(2*nv+1):nm])
+NS. <- which(NS==F)
+
+#Initial model
+factorModel <- mxModel(name="UNISEMinitial",
+ mxMatrix(type="Symm", nrow=nm, ncol=nm, free=PSp, values=PSv, name="PS"),
+ mxMatrix(type="Full", nrow=nm, ncol=nm, free=BEp, values=BEv, name="BE"),
+ mxMatrix(type="Diag", nrow=nm, ncol=nm, free=F, values=1, name="ID"),
+ mxAlgebra(expression=solve(ID-BE)%*%PS%*%t(solve(ID-BE)), name="R"),
+ mxMLObjective(covariance="R", dimnames = colnames(CO)),
+ mxData(observed=CO, type="cov", numObs=nr)
+)
+#Initial model fit
+OFit <- mxRun(factorModel)
+Ochi <- summary(OFit)$Chi
+BB <- BB. <- OFit$BE@values[(nv+1):(2*nv),]
+
+ if(AS==T){
+#Search loop
+for(M in 1:bl){ #Outer loop
+for(S in 1:bl){ #Inner loop
+if(BB[S]==0 & !(S %in% NS.)){
+BB[S] <- .1
+BEv <- rbind(BT,BB,BBB)  #UNISEM replacement
+BEp <- matrix(F,nm,nm)
+BEp[which(BEv!=0)]<-T
+
+factorModel <- mxModel(name="UNISEMsearch",
+ mxMatrix(type="Symm", nrow=nm, ncol=nm, free=PSp, values=PSv, name="PS"),
+ mxMatrix(type="Full", nrow=nm, ncol=nm, free=BEp, values=BEv, name="BE"),
+ mxMatrix(type="Diag", nrow=nm, ncol=nm, free=F, values=1, name="ID"),
+ mxAlgebra(expression=solve(ID-BE)%*%PS%*%t(solve(ID-BE)), name="R"),
+ mxMLObjective(covariance="R", dimnames = colnames(CO)),
+ mxData(observed=CO, type="cov", numObs=nr)
+)
+NFit <- mxRun(factorModel)
+ChiSt[S] <- summary(NFit)$Chi
+
+}else{
+ChiSt[S] <- NA}
+
+#Replace for inner loop iterations
+BB <- BB.
+} #End inner loop
+
+ChiD <- Ochi-ChiSt
+
+MChi <- max(ChiD,na.rm=T)
+print(matrix(ChiD,nv,nm))
+print(MChi)
+if(MChi > CUT){
+E <- which(ChiD==MChi)
+Ochi <- ChiSt[E]
+BB.[E] <- .1
+} else {
+BEv <- rbind(BT,BB.,BBB)
+BEp <- matrix(F,nm,nm)
+BEp[which(BEv!=0)]<-T
+
+
+factorModel <- mxModel(name="UNISEMfinal",
+ mxMatrix(type="Symm", nrow=nm, ncol=nm, free=PSp, values=PSv, name="PS"),
+ mxMatrix(type="Full", nrow=nm, ncol=nm, free=BEp, values=BEv, name="BE",byrow=T),
+ mxMatrix(type="Diag", nrow=nm, ncol=nm, free=F, values=1, name="ID"),
+ mxAlgebra(expression=solve(ID-BE)%*%PS%*%t(solve(ID-BE)), name="R"),
+ mxMLObjective(covariance="R", dimnames = colnames(CO)),
+ mxData(observed=CO, type="cov", numObs=nr)
+)
+Fit <- mxRun(factorModel)
+break
+}
+}
+}else{
+Fit <- OFit}
+return(Fit)
+}
+
